@@ -1,21 +1,19 @@
-# Use Python 3.10 slim image as base
 FROM python:3.10-slim
 
-# Set working directory inside container
 WORKDIR /app
 
-# Install required system packages for MySQL and building Python dependencies
-RUN apt update && apt install -y gcc default-libmysqlclient-dev pkg-config && \
-    rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc default-libmysqlclient-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy all project files into the container
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
 COPY . .
 
-# Install Python dependencies from requirements file
-RUN pip install -r requirement.txt
+RUN useradd -m appuser
+USER appuser
 
-# Expose port 5000 for Flask application
 EXPOSE 5000
 
-# Run the Flask application
-CMD ["python","app.py"]
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "app:app"]
