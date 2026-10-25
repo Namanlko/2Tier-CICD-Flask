@@ -178,30 +178,41 @@
         </form>
     </div>
 
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <script>
-        $(document).ready(function () {
-            $("#messageForm").on("submit", function (e) {
-                e.preventDefault();
-                let input = $("input[name='new_message']");
-                let msg = input.val().trim();
-                if (!msg) return;
+        const form = document.getElementById("messageForm");
+        const list = document.getElementById("messagesList");
+        const input = form.querySelector("input[name='new_message']");
+        const button = form.querySelector("input[type='submit']");
 
-                $.ajax({
-                    url: "/submit",
-                    type: "POST",
-                    data: { new_message: msg },
-                    success: function (response) {
-                        if (response && response.message) {
-                            $("#emptyState").remove();
-                            $("#messagesList").append("<p>" + response.message + "</p>");
-                            input.val("");
-                            let box = document.getElementById("messagesList");
-                            box.scrollTop = box.scrollHeight;
-                        }
-                    }
+        form.addEventListener("submit", async function (e) {
+            e.preventDefault();
+            const msg = input.value.trim();
+            if (!msg) return;
+
+            button.disabled = true;
+            try {
+                const res = await fetch("/submit", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                    body: new URLSearchParams({ new_message: msg })
                 });
-            });
+                const data = await res.json();
+                if (!res.ok) {
+                    alert(data.error || "Could not send message.");
+                    return;
+                }
+                const empty = document.getElementById("emptyState");
+                if (empty) empty.remove();
+                const p = document.createElement("p");
+                p.textContent = data.message;   // textContent: no HTML injection (XSS-safe)
+                list.appendChild(p);
+                input.value = "";
+                list.scrollTop = list.scrollHeight;
+            } catch (err) {
+                alert("Network error. Please try again.");
+            } finally {
+                button.disabled = false;
+            }
         });
     </script>
 </body>
