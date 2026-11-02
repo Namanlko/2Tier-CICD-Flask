@@ -4,21 +4,20 @@
 
 This project demonstrates a complete **CI/CD pipeline for a two-tier web application** using modern DevOps tools.
 
-The application is built using **Flask (Python) and MySQL**, deployed using **Docker containers**. Jenkins automates the build and deployment process whenever new code is pushed to GitHub. The entire setup runs on an **AWS EC2 instance**.
+The application is built using **Flask (Python) and MySQL**, deployed using **Docker containers**. Jenkins automates the build and deployment process whenever new code is pushed to GitHub (via a webhook or SCM polling). The entire setup runs on an **AWS EC2 instance**.
 
 ![UI](diagram/1.jpg)
 
 ## 🏗️ Architecture Diagram
-
 
 ```
 +-----------------+      +----------------------+      +-----------------------------+
 |   Developer     |----->|     GitHub Repo      |----->|        Jenkins Server       |
 | (pushes code)   |      | (Source Code Mgmt)   |      |  (on AWS EC2)               |
 +-----------------+      +----------------------+      |                             |
-                                                       | 1. Clones Repo              |
-                                                       | 2. Builds Docker Image      |
-                                                       | 3. Runs Docker Compose      |
+                                                       | 1. Checks out repo (SCM)    |
+                                                       | 2. Builds & runs Compose    |
+                                                       | 3. Verifies /ready endpoint |
                                                        +--------------+--------------+
                                                                       |
                                                                       | Deploys
@@ -38,8 +37,6 @@ The application is built using **Flask (Python) and MySQL**, deployed using **Do
                                                        +-----------------------------+
 ```
 
-
-
 ## 🛠️ DevOps Tools Used
 
 | Tool | Purpose |
@@ -52,14 +49,23 @@ The application is built using **Flask (Python) and MySQL**, deployed using **Do
 | Flask | Backend application |
 | MySQL | Database |
 
+## 💻 Run Locally
 
+```bash
+git clone https://github.com/Namanlko/2Tier-CICD-Flask.git
+cd 2Tier-CICD-Flask
+cp .env.example .env      # then edit .env and set your own passwords
+docker compose up -d --build
+```
+
+Open `http://localhost:5000`. Health endpoints: `/health` (app is up) and `/ready` (app can reach MySQL).
 
 ## Step 1: Launch AWS EC2 Instance
 
 1. Go to AWS EC2 console
 2. Launch a new instance
-3. Select **Ubuntu 22.04 LTS**
-4. Instance type: **t2.micro**
+3. Select **Ubuntu 24.04 LTS**
+4. Instance type: **t3.small** (2 GB RAM) or larger. Jenkins, MySQL 8 and Flask together will not fit comfortably in 1 GB (t2.micro)
 5. Create a key pair for SSH access
 
 ![EC2 Instance](diagram/2.jpg)
@@ -68,8 +74,15 @@ The application is built using **Flask (Python) and MySQL**, deployed using **Do
 
 Allow the following inbound ports:
 
-![Security Group](diagram/3.jpg)
+| Port | Purpose | Source |
+|------|---------|--------|
+| 22 | SSH | Your IP only |
+| 5000 | Flask app | Anywhere (or your IP) |
+| 8080 | Jenkins UI | Your IP only |
 
+MySQL (3306) is **not** exposed; it is reachable only inside the Docker network.
+
+![Security Group](diagram/3.jpg)
 
 ## Step 3: Connect to EC2
 
@@ -84,15 +97,14 @@ ssh -i your-key.pem ubuntu@your-ec2-public-ip
 sudo apt update && sudo apt upgrade -y
 
 # Install Git, Docker, Docker Compose
-sudo apt install git docker.io docker-compose-v2 -y
+sudo apt install git docker.io docker-compose-v2 curl -y
 
 # Start Docker
 sudo systemctl start docker
 sudo systemctl enable docker
 
-# Allow current user to run Docker
+# Allow current user to run Docker (log out and back in afterwards)
 sudo usermod -aG docker $USER
-newgrp docker
 ```
 
 ## Step 5: Install Jenkins
@@ -102,9 +114,13 @@ newgrp docker
 sudo apt install openjdk-17-jdk -y
 
 # Add Jenkins repository
-curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key | sudo tee /usr/share/keyrings/jenkins-keyring.asc
+# NOTE: Jenkins rotates its signing key. If apt reports a signature error,
+# check https://www.jenkins.io/doc/book/installing/linux/ for the current key file name.
+sudo wget -O /usr/share/keyrings/jenkins-keyring.asc \
+  https://pkg.jenkins.io/debian-stable/jenkins.io-2026.key
 
-echo deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/ | sudo tee /etc/apt/sources.list.d/jenkins.list
+echo "deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/" \
+  | sudo tee /etc/apt/sources.list.d/jenkins.list
 
 # Install Jenkins
 sudo apt update
@@ -135,130 +151,87 @@ sudo systemctl restart jenkins
 
 ![Jenkins](diagram/4.jpg)
 
-
-## Step 8: GitHub Repository Structure
+## Step 8: Repository Structure
 
 ```
-📁 two-tier-flask-cicd-pipeline-aws/
-├── 📁 diagram/
-├── 📁 templates/
-├── 📄 Dockerfile
-├── 📄 Jenkinsfile
-├── 📄 README.md
-├── 📄 app.py
-├── 📄 docker-compose.yml
-├── 📄 message.sql
-└──
+2Tier-CICD-Flask/
+├── diagram/
+├── templates/
+│   └── index.html
+├── .dockerignore
+├── .env.example
+├── .gitignore
+├── Dockerfile
+├── Jenkinsfile
+├── README.md
+├── app.py
+├── docker-compose.yml
+├── message.sql
+└── requirements.txt
 ```
+
+## 🔐 Step 9: Add Secrets to Jenkins
+
+Passwords are **not** stored in the repository. The `.env` file is git-ignored, so Jenkins needs it as a credential:
+
+1. Create a local `.env` from `.env.example` with strong passwords
+2. Jenkins → **Manage Jenkins → Credentials → Add Credentials**
+3. Kind: **Secret file**, upload your `.env`
+4. ID: `two-tier-env`
+
+The Jenkinsfile copies this file into the workspace as `.env` for the build and deletes it afterwards.
 
 ## 🐳 Dockerfile
 
-```dockerfile
-FROM python:3.10-slim
-
-WORKDIR /app
-
-RUN apt update && apt install -y gcc default-libmysqlclient-dev pkg-config && \
-    rm -rf /var/lib/apt/lists/*
-
-COPY . .
-
-RUN pip install -r requirement.txt
-
-EXPOSE 5000
-
-CMD ["python","app.py"]
-```
+See [`Dockerfile`](Dockerfile): Python 3.12 slim, dependencies installed from `requirements.txt`, app runs as a non-root user under **gunicorn**.
 
 ## 🐙 Docker Compose File
 
-```yaml
-version: "3.8"
+See [`docker-compose.yml`](docker-compose.yml). Key points:
 
-services:
-
-  mysql:
-    image: mysql
-    container_name: mysql
-    environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: devops
-    ports:
-      - "3306:3306"
-
-  flask:
-    build: .
-    container_name: flask-app
-    ports:
-      - "5000:5000"
-    environment:
-      MYSQL_HOST: mysql
-      MYSQL_USER: root
-      MYSQL_PASSWORD: root
-      MYSQL_DB: devops
-    depends_on:
-      - mysql
-```
+- `mysql:8.0` with a named volume (`mysql-data`) and a healthcheck
+- Credentials come from `.env` (see `.env.example`)
+- `message.sql` is mounted into MySQL's init directory to create the table on first start
+- Flask waits for MySQL to be **healthy** (`depends_on: condition: service_healthy`)
+- Both services share the custom network `two-tier`; MySQL has no published port
 
 ## 🔁 Jenkins Pipeline (Jenkinsfile)
 
-```groovy
-pipeline {
-    agent any
+See [`Jenkinsfile`](Jenkinsfile). Stages:
 
-    stages {
+1. **Prepare Environment** – loads `.env` from the `two-tier-env` Jenkins credential
+2. **Build & Deploy** – `docker compose down` then `docker compose up --build -d`
+3. **Verify** – polls `http://localhost:5000/ready` until the app and database respond
 
-        stage ('Code Clone') {
-            steps {
-                git branch: 'main', url: 'https://github.com/learnwithnaman/Two-Tier-Project.git'
-            }
-        }
+On failure it prints container status and logs. Source checkout is done by Jenkins itself (Pipeline script from SCM), so there is no separate clone stage.
 
-        stage ('Build Docker Image') {
-            steps {
-                sh 'docker build -t flask-app:latest .'
-            }
-        }
-
-        stage ('Deploy with Docker Compose') {
-            steps {
-                sh 'docker compose down || true'
-                sh 'docker compose up --build -d'
-            }
-        }
-
-    }
-}
-```
-
-
-## Step 9: Create Jenkins Pipeline
+## Step 10: Create Jenkins Pipeline
 
 1. Go to Jenkins dashboard
 2. Click **New Item** → Select **Pipeline**
 3. Choose **Pipeline script from SCM**
 4. Select **Git**
-5. Enter your GitHub repository URL
+5. Enter `https://github.com/Namanlko/2Tier-CICD-Flask.git`, branch `main`
 6. Script path: `Jenkinsfile`
+
+Optional: add a GitHub webhook (`http://<JENKINS-IP>:8080/github-webhook/`) and change the trigger in the Jenkinsfile to `githubPush()` for instant builds. Without it, the pipeline polls GitHub every ~5 minutes.
 
 ![Pipeline Config](diagram/5.jpg)
 
-
-## Step 10: Run the Pipeline
+## Step 11: Run the Pipeline
 
 Click **Build Now** in Jenkins. The pipeline will:
 
-1. Clone GitHub repository
-2. Build Docker image
-3. Deploy using Docker Compose
+1. Check out the GitHub repository
+2. Build the image and deploy using Docker Compose
+3. Verify the app is healthy
 
 ![Pipeline Run](diagram/6.jpg)
-
 
 ## ✅ Verify Deployment
 
 ```bash
-# Check running containers
+# Check running containers (both should be "healthy")
 docker ps
 
 # Open app in browser
@@ -267,27 +240,16 @@ http://<EC2-PUBLIC-IP>:5000
 
 ![UI](diagram/1.jpg)
 
-
 ## 🌐 Infrastructure Diagram
 
 ![Infrastructure](diagram/8.png)
-
 
 ## 🔄 DevOps Workflow
 
 ![Workflow](diagram/9.png)
 
-
-
 ## 🏁 Conclusion
 
 This project demonstrates a real-world DevOps workflow where deployment is fully automated. By integrating **GitHub, Jenkins, Docker, and AWS**, the process becomes faster, repeatable, and reliable.
 
-
-
 *Built with ❤️ by **Naman Pandey** - DevOps | Cloud Engineer*
-
-
-
-
-
