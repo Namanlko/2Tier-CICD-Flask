@@ -2,7 +2,7 @@
 
 ## 📌 Project Overview
 
-This project demonstrates a complete **CI/CD pipeline for a two-tier web application** using modern DevOps tools.
+This project demonstrates a complete **CI/CD pipeline for a two-tier web application** using modern DevOps tools. 
 
 The application is built using **Flask (Python) and MySQL**, deployed using **Docker containers**. Jenkins automates the build and deployment process whenever new code is pushed to GitHub (via a webhook or SCM polling). The entire setup runs on an **AWS EC2 instance**.
 
